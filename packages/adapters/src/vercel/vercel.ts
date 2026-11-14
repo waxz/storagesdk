@@ -1,6 +1,5 @@
 import {
   type Adapter,
-  bodyToBytes,
   checkSignal,
   defaultDiff,
   defaultMerge,
@@ -36,6 +35,7 @@ import {
   presignUrl,
   put,
 } from '@vercel/blob';
+import { prepareBody } from '../body-stream.js';
 import { asStorageError } from './errors.js';
 import { withRateLimitRetry } from './retry.js';
 
@@ -139,25 +139,37 @@ function impl(
       checkSignal(opts?.signal);
       // Vercel Blob has no user-metadata field; `opts.metadata` is
       // silently dropped (documented in README).
-      const payload = await bodyToBytes(body);
+      // Streams go to `@vercel/blob`'s multipart upload, which reads them
+      // part by part. (A plain PUT would buffer and retry the whole body.)
+      const payload = await prepareBody(body);
       try {
-        await put(bucketKey(bucketName, key), Buffer.from(payload), {
-          access: raw.access,
-          addRandomSuffix: false,
-          allowOverwrite: true,
-          // `@vercel/blob` splits the body into parts and uploads them in
-          // parallel when `multipart` is set. It has no part-size or
-          // concurrency knobs, so `partSize`/`concurrency` don't apply.
-          ...(opts?.multipart === true ? { multipart: true } : {}),
-          ...(opts?.contentType !== undefined
-            ? { contentType: opts.contentType }
-            : {}),
-          ...(opts?.signal ? { abortSignal: opts.signal } : {}),
-          ...tokenSpread,
-        });
+        await put(
+          bucketKey(bucketName, key),
+          payload.data instanceof Uint8Array
+            ? Buffer.from(payload.data)
+            : payload.data,
+          {
+            access: raw.access,
+            addRandomSuffix: false,
+            allowOverwrite: true,
+            // `@vercel/blob` splits the body into parts and uploads them in
+            // parallel when `multipart` is set. It has no part-size or
+            // concurrency knobs, so `partSize`/`concurrency` don't apply.
+            ...(opts?.multipart === true || payload.streamed
+              ? { multipart: true }
+              : {}),
+            ...(opts?.contentType !== undefined
+              ? { contentType: opts.contentType }
+              : {}),
+            ...(opts?.signal ? { abortSignal: opts.signal } : {}),
+            ...tokenSpread,
+          }
+        );
+        const size = payload.size();
+        if (payload.streamed) opts?.onProgress?.({ loaded: size, total: size });
         return {
           path: key,
-          size: payload.byteLength,
+          size,
           contentType: opts?.contentType ?? 'application/octet-stream',
           // Vercel's PutBlobResult doesn't expose etag/lastModified;
           // omit them rather than fabricating values. `head()` returns

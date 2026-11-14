@@ -244,8 +244,15 @@ function impl(
 
     async upload(path, body, opts?: UploadOptions): Promise<StorageItemMeta> {
       checkSignal(opts?.signal);
-      const bytes = await bodyToBytes(body);
-      opts?.onProgress?.({ loaded: bytes.byteLength, total: bytes.byteLength });
+      // `addFile` reads streams itself, so pass them through unbuffered.
+      const source =
+        body instanceof ReadableStream ? body : await bodyToBytes(body);
+      if (source instanceof Uint8Array) {
+        opts?.onProgress?.({
+          loaded: source.byteLength,
+          total: source.byteLength,
+        });
+      }
       await commit(async (repo, branch) => {
         const builder = repo.createCommit({
           targetBranch: branch,
@@ -254,7 +261,7 @@ function impl(
           ...(committer !== undefined ? { committer } : {}),
           ...(opts?.signal !== undefined ? { signal: opts.signal } : {}),
         });
-        await builder.addFile(path, bytes).send();
+        await builder.addFile(path, source).send();
       }, opts?.signal);
       return headObject(path, opts);
     },

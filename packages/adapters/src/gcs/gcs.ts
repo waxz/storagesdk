@@ -1,3 +1,6 @@
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
+import type { ReadableStream as NodeWebReadableStream } from 'node:stream/web';
 import {
   type Bucket,
   type File,
@@ -31,6 +34,7 @@ import {
   type UrlOptions,
   writeManifest,
 } from '@storagesdk/core/adapter';
+import { countBytes } from '../body-stream.js';
 import { asStorageError } from './errors.js';
 
 export interface GcsConfig {
@@ -125,6 +129,42 @@ function impl(
     async upload(key, body, opts?: UploadOptions): Promise<StorageItemMeta> {
       checkSignal(opts?.signal);
       const file = bucket.file(key);
+      if (body instanceof ReadableStream) {
+        // Stream straight into a resumable upload instead of buffering.
+        const counted = countBytes(body);
+        try {
+          await pipeline(
+            Readable.fromWeb(
+              counted.stream as NodeWebReadableStream<Uint8Array>
+            ),
+            file.createWriteStream({
+              resumable: true,
+              ...(opts?.contentType !== undefined
+                ? { contentType: opts.contentType }
+                : {}),
+              ...(opts?.metadata !== undefined
+                ? { metadata: { metadata: opts.metadata } }
+                : {}),
+              ...(opts?.partSize !== undefined
+                ? { chunkSize: opts.partSize }
+                : {}),
+            }),
+            ...(opts?.signal ? [{ signal: opts.signal }] : [])
+          );
+        } catch (err) {
+          throw asStorageError(err);
+        }
+        const size = counted.bytes();
+        opts?.onProgress?.({ loaded: size, total: size });
+        return {
+          path: key,
+          size,
+          contentType: opts?.contentType ?? 'application/octet-stream',
+          etag: '',
+          lastModified: new Date(),
+          ...(opts?.metadata !== undefined ? { metadata: opts.metadata } : {}),
+        };
+      }
       const payload = await bodyToBytes(body);
       try {
         await file.save(Buffer.from(payload), {

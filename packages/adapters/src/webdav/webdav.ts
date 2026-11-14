@@ -1,8 +1,9 @@
 import { posix } from 'node:path';
+import { Readable } from 'node:stream';
+import type { ReadableStream as NodeWebReadableStream } from 'node:stream/web';
 import {
   type Adapter,
   type BodyInput,
-  bodyToBytes,
   type CreateSnapshotOptions,
   checkSignal,
   defaultDiff,
@@ -33,6 +34,7 @@ import {
   type FileStat,
   type WebDAVClient,
 } from 'webdav';
+import { prepareBody } from '../body-stream.js';
 import { asStorageError, isForbidden, isMissing } from './errors.js';
 import { resolveSafe, resolveSiblingSafe } from './paths.js';
 
@@ -261,11 +263,19 @@ function createImpl(
     ): Promise<StorageItemMeta> {
       checkSignal(opts?.signal);
       const fullPath = resolveSafe(folderPath, key);
-      const bytes = await bodyToBytes(body);
+      // Streams are sent as they arrive (chunked transfer encoding) rather
+      // than collected first.
+      const prepared = await prepareBody(body);
       await ensureDir(posix.dirname(fullPath), opts?.signal);
       const contentType = opts?.contentType ?? 'application/octet-stream';
       try {
-        await client.putFileContents(fullPath, Buffer.from(bytes), {
+        const data =
+          prepared.data instanceof Uint8Array
+            ? Buffer.from(prepared.data)
+            : Readable.fromWeb(
+                prepared.data as NodeWebReadableStream<Uint8Array>
+              );
+        await client.putFileContents(fullPath, data, {
           overwrite: true,
           headers: { 'Content-Type': contentType },
           ...(opts?.signal ? { signal: opts.signal } : {}),
@@ -279,11 +289,13 @@ function createImpl(
       // User metadata is silently dropped — WebDAV's PROPPATCH dead
       // properties exist but server support is spotty.
       const now = new Date();
+      const size = prepared.size();
+      if (prepared.streamed) opts?.onProgress?.({ loaded: size, total: size });
       return {
         path: key,
-        size: bytes.byteLength,
+        size,
         contentType,
-        etag: `${bytes.byteLength}-${now.getTime()}`,
+        etag: `${size}-${now.getTime()}`,
         lastModified: now,
       };
     },

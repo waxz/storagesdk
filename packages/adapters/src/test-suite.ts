@@ -359,6 +359,33 @@ export function storageAdapterTestSuite<Raw = unknown>(
         expect(item.size).toBe(12);
       });
 
+      it('round-trips a ReadableStream body', async () => {
+        // Uneven chunks, so adapters that re-chunk into parts or blocks hit
+        // boundaries mid-chunk. Kept under 1 MB for the GitHub adapter.
+        const data = new Uint8Array(600_000).map((_, i) => i % 251);
+        const sizes = [1, 65_536, 200_000, 7, 334_456];
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            let off = 0;
+            for (const n of sizes) {
+              controller.enqueue(data.slice(off, off + n));
+              off += n;
+            }
+            controller.close();
+          },
+        });
+        // `Storage.upload` always sets `multipart` for streams.
+        const meta = await ctx.upload('streamed.bin', body, {
+          multipart: true,
+        });
+        expect(meta.size).toBe(data.byteLength);
+        const item = await ctx.download('streamed.bin');
+        expect(item.size).toBe(data.byteLength);
+        expect(Buffer.compare(Buffer.from(item.body), Buffer.from(data))).toBe(
+          0
+        );
+      });
+
       const contentTypeIt = hasContentType ? it : it.skip;
       contentTypeIt(
         hasContentType

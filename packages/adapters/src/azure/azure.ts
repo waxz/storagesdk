@@ -3,6 +3,7 @@ import {
   BlobSASPermissions,
   BlobServiceClient,
   type BlobServiceClient as BlobServiceClientType,
+  type BlockBlobClient,
   generateBlobSASQueryParameters,
   StorageSharedKeyCredential,
 } from '@azure/storage-blob';
@@ -35,6 +36,7 @@ import {
   type UrlOptions,
   writeManifest,
 } from '@storagesdk/core/adapter';
+import { blocks } from '../body-stream.js';
 import { asStorageError } from './errors.js';
 
 export interface AzureConfig {
@@ -92,6 +94,15 @@ function impl(
       checkSignal(opts?.signal);
       const blob = container.getBlockBlobClient(key);
       const bridge = bridgeSignalToController(opts?.signal);
+      if (body instanceof ReadableStream) {
+        try {
+          return await uploadStream(blob, key, body, opts, bridge.controller);
+        } catch (err) {
+          throw asStorageError(err);
+        } finally {
+          bridge.dispose();
+        }
+      }
       try {
         const payload = await bodyToBytes(body);
         await blob.uploadData(payload, {
@@ -558,4 +569,50 @@ function sasSourceUrl(
 
 function stripQuotes(s: string): string {
   return s.startsWith('"') && s.endsWith('"') ? s.slice(1, -1) : s;
+}
+
+/** Default block size for streamed uploads; Azure allows up to 4000 MiB per block. */
+const STREAM_BLOCK_SIZE = 8 * 1024 * 1024;
+
+/**
+ * Uploads a stream as a block blob without buffering it: each `partSize`
+ * block (default 8 MiB) is staged as it arrives, then the block list is
+ * committed. Uncommitted blocks from a failed upload are discarded by Azure.
+ */
+async function uploadStream(
+  blob: BlockBlobClient,
+  key: string,
+  body: ReadableStream<Uint8Array>,
+  opts: UploadOptions | undefined,
+  controller: AbortController | undefined
+): Promise<StorageItemMeta> {
+  const abortSignal = controller?.signal;
+  const ids: string[] = [];
+  let size = 0;
+  for await (const block of blocks(body, opts?.partSize ?? STREAM_BLOCK_SIZE)) {
+    checkSignal(opts?.signal);
+    // Block IDs must be base64 and all the same length within a blob.
+    const id = btoa(String(ids.length).padStart(6, '0'));
+    await blob.stageBlock(id, block, block.byteLength, {
+      ...(abortSignal ? { abortSignal } : {}),
+    });
+    ids.push(id);
+    size += block.byteLength;
+  }
+  await blob.commitBlockList(ids, {
+    ...(opts?.contentType !== undefined
+      ? { blobHTTPHeaders: { blobContentType: opts.contentType } }
+      : {}),
+    ...(opts?.metadata !== undefined ? { metadata: opts.metadata } : {}),
+    ...(abortSignal ? { abortSignal } : {}),
+  });
+  opts?.onProgress?.({ loaded: size, total: size });
+  return {
+    path: key,
+    size,
+    contentType: opts?.contentType ?? 'application/octet-stream',
+    etag: '',
+    lastModified: new Date(),
+    ...(opts?.metadata !== undefined ? { metadata: opts.metadata } : {}),
+  };
 }

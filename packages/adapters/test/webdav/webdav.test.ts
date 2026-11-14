@@ -1,3 +1,5 @@
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { describe, expect, it } from 'vitest';
 import { storageAdapterTestSuite } from '../../src/test-suite.js';
 import { webdav } from '../../src/webdav/webdav.js';
@@ -60,3 +62,67 @@ if (!configured) {
     });
   });
 }
+
+// Runs against an in-process HTTP server, so it needs no WebDAV setup.
+describe('webdav adapter implementation', () => {
+  it('sends the body while the stream is still open', async () => {
+    let received = 0;
+    const server = createServer((req, res) => {
+      if (req.method === 'PUT') {
+        req.on('data', (d: Buffer) => {
+          received += d.byteLength;
+        });
+        req.on('end', () => {
+          res.writeHead(201);
+          res.end();
+        });
+        return;
+      }
+      // PROPFIND: nothing exists yet; MKCOL and the rest: created.
+      res.writeHead(req.method === 'PROPFIND' ? 404 : 201);
+      res.end();
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, '127.0.0.1', resolve)
+    );
+    const { port } = server.address() as AddressInfo;
+    const chunk = new Uint8Array(64 * 1024).fill(1);
+    let sent = 0;
+    const body = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        if (sent === 2) {
+          // Hold the stream open until the server has bytes. An upload
+          // that collects the whole body first never sends any.
+          const deadline = Date.now() + 3_000;
+          while (received === 0) {
+            if (Date.now() > deadline) {
+              controller.error(
+                new Error('nothing sent before the stream ended')
+              );
+              return;
+            }
+            await new Promise((r) => setTimeout(r, 20));
+          }
+        }
+        if (sent === 3) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(chunk);
+        sent += 1;
+      },
+    });
+    try {
+      const adapter = webdav({
+        baseUrl: `http://127.0.0.1:${port}`,
+        root: '/',
+        folder: 'f',
+      });
+      const meta = await adapter.upload('a.bin', body);
+      expect(meta.size).toBe(3 * chunk.byteLength);
+      expect(received).toBe(3 * chunk.byteLength);
+    } finally {
+      server.close();
+    }
+  });
+});
