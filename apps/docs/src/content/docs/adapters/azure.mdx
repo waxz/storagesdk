@@ -39,6 +39,7 @@ azure({
 - For Entra ID, SAS tokens, or connection-string auth, construct a `BlobServiceClient` yourself and use `storage.raw` directly.
 - `maxSize` / `minSize` on `uploadUrl()` are accepted but **not enforced** — Azure SAS URLs have no `content-length-range` equivalent. Cap server-side if you need a hard limit.
 - `uploadUrl()` returns `x-ms-blob-type: BlockBlob` in `headers` so callers don't need Azure-specific knowledge.
+- Stream bodies (`ReadableStream`) upload as they arrive: each `partSize` chunk (8 MiB by default) is staged as a block, then the block list is committed. Strings, bytes and blobs go through `uploadData` in one call.
 - Cross-container copies for snapshots/forks use `syncCopyFromURL` with a short-lived read SAS (real Azure requires source URL to self-authenticate; Azurite is lax).
 
 ## Compatibility

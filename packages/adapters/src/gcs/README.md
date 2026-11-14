@@ -58,6 +58,10 @@ const fork = storage.forks.get('photos-exp');
 
 **GCS bucket names are globally unique across all of GCS.** The 25-digit snapshot-id suffix makes collisions effectively impossible for snapshots. Fork names are user-provided — pick something unlikely to collide globally (e.g. prefix with your org or project).
 
+## Uploads
+
+Stream bodies (`ReadableStream`) are piped into a resumable upload as they arrive instead of being read into memory first. Pass `partSize` to split the upload into separate requests of that size (it maps to the client's `chunkSize`, which must be a multiple of 256 KiB). Strings, bytes and blobs are saved in one request.
+
 ## Signed URLs
 
 `url()` and `uploadUrl()` return v4-signed URLs. Default expiry is 1 hour.

@@ -62,6 +62,10 @@ await fork.upload('new.jpg', blob);
 - **Custom metadata.** Vercel Blob has no user-metadata field. `upload({ metadata })` silently drops the metadata. Use a sidecar object if you need per-blob metadata.
 - **`minSize` on `uploadUrl`.** Vercel Blob's signed PUT URLs enforce a maximum size via `maximumSizeInBytes` but have no lower bound. `minSize` is silently dropped.
 
+## Uploads
+
+`multipart: true` uploads use `@vercel/blob`'s multipart upload. Stream bodies (`ReadableStream`) always do, whatever `multipart` says: the SDK reads them in 8 MB parts and uploads several in parallel, so a stream is never read into memory first. The SDK can still hold up to 128 MB while parts are in flight, so mind tight memory limits.
+
 ## Public stores and read-your-writes consistency
 
 Vercel Blob serves public blobs through a CDN, and the CDN can briefly return stale reads (including stale 404s) right after a write. The adapter passes `useCache: false` on every `download()` to bypass the CDN — but this option is only effective for **private** stores; on public stores it's ignored. If you use the snapshot/fork machinery (which relies on a `read → mutate → write` round-trip on the manifest), use a private store. Plain `upload`/`download`/`head`/`list` work fine on either.

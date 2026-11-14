@@ -49,6 +49,7 @@ codeStorage({
 - `branch` defaults to the repository default branch.
 - Set `key` to a Code Storage ES256 private key PEM, or set `token` to a pre-minted JWT.
 - Writes create commits on the configured branch.
+- Stream bodies (`ReadableStream`) are passed to the commit builder as is; it sends them in 4 MB chunks.
 - Snapshots are lightweight tags under `storagesdk/<branch>/<id>`.
 - Forks are branches in the same repository.
 

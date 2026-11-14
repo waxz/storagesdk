@@ -53,6 +53,10 @@ await storage.forks.create({ name: 'photos-exp', fromSnapshot: snap.id });
 const fork = storage.forks.get('photos-exp'); // full read/write Storage
 ```
 
+## Uploads
+
+Stream bodies (`ReadableStream`) upload as they arrive: each `partSize` chunk (8 MiB by default) is staged as a block, then the block list is committed, so the adapter holds one block in memory at a time. Strings, bytes and blobs go through `uploadData` in one call.
+
 ## Signed URLs
 
 `url()` and `uploadUrl()` return SAS-signed URLs scoped to a single blob. Default expiry is 1 hour.

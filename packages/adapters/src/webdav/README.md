@@ -40,6 +40,7 @@ webdav({
 - `opts.metadata` on `upload` is silently dropped — WebDAV's PROPPATCH dead properties exist in the spec but server support is patchy (Nextcloud OK, generic Apache mod_dav unreliable).
 - `url()` returns the plain resource URL. It's not signed — fetching it requires the caller to supply auth (Basic/Digest/Bearer). Conformance flips `fetchableSignedUrls: false` to match.
 - `uploadUrl()` throws `NotSupported` — WebDAV has no presigned upload concept.
+- A `ReadableStream` body is sent as it arrives, with chunked transfer encoding, so the adapter never holds the whole file. Other body types are sent with a `Content-Length`.
 - `storage.raw` is the underlying `WebDAVClient` — reach for it when you need PROPPATCH, LOCK, custom WebDAV properties, or anything else the adapter doesn't surface.
 
 ## Capabilities

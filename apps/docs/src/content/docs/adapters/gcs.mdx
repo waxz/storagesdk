@@ -42,6 +42,7 @@ gcs({
 - Omit both `credentials` and `keyFilename` to use Application Default Credentials (env var, `gcloud auth application-default login`, or GCE/GKE metadata server).
 - GCS bucket names are **globally unique**. Snapshot ids embed 25 digits for collision safety; fork names are user-provided — prefix them with an org or project name.
 - `uploadUrl({ maxSize, contentType })` returns a v4 POST policy when size constraints are set; otherwise PUT presigning.
+- Stream bodies (`ReadableStream`) are piped into a resumable upload as they arrive instead of being read into memory first. `partSize` maps to the client's `chunkSize` (a multiple of 256 KiB) if you want the upload split into separate requests.
 - `createReadStream({ start, end })` is used for byte-range reads; the `'response'` event captures body + metadata in a single HTTP GET.
 
 ## Compatibility

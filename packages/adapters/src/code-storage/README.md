@@ -59,7 +59,7 @@ Set either `CODE_STORAGE_KEY` or `CODE_STORAGE_TOKEN`.
 ## Code Storage Notes
 
 - Object reads use Code Storage file APIs.
-- Writes create Git commits through the Code Storage commit builder.
+- Writes create Git commits through the Code Storage commit builder. Stream bodies (`ReadableStream`) are passed to it as is; it sends them in 4 MB chunks.
 - Snapshots are lightweight tags under `storagesdk/<branch>/<id>`.
 - Forks are branches in the same repository.
 - `url()` and `uploadUrl()` throw `NotSupported`; Code Storage exposes authenticated Git remote URLs, not object-style signed file URLs.
