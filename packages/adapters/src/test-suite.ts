@@ -359,6 +359,13 @@ export function storageAdapterTestSuite<Raw = unknown>(
         expect(item.size).toBe(12);
       });
 
+      it('throws NotFound from head on a key that is only a prefix', async () => {
+        await ctx.upload('folder/inner.txt', 'x');
+        await expect(ctx.head('folder')).rejects.toMatchObject({
+          code: 'NotFound',
+        });
+      });
+
       it('round-trips a ReadableStream body', async () => {
         // Uneven chunks, so adapters that re-chunk into parts or blocks hit
         // boundaries mid-chunk. Kept under 1 MB for the GitHub adapter.

@@ -67,8 +67,10 @@ if (!configured) {
 describe('webdav adapter implementation', () => {
   it('sends the body while the stream is still open', async () => {
     let received = 0;
+    let putAuth: string | undefined;
     const server = createServer((req, res) => {
       if (req.method === 'PUT') {
+        putAuth = req.headers.authorization;
         req.on('data', (d: Buffer) => {
           received += d.byteLength;
         });
@@ -117,10 +119,15 @@ describe('webdav adapter implementation', () => {
         baseUrl: `http://127.0.0.1:${port}`,
         root: '/',
         folder: 'f',
+        username: 'alice',
+        password: 'pä:ss',
       });
       const meta = await adapter.upload('a.bin', body);
       expect(meta.size).toBe(3 * chunk.byteLength);
       expect(received).toBe(3 * chunk.byteLength);
+      expect(putAuth).toBe(
+        `Basic ${Buffer.from('alice:pä:ss').toString('base64')}`
+      );
     } finally {
       server.close();
     }

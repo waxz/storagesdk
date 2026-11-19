@@ -80,6 +80,11 @@ async function statToMeta(
   } catch (err) {
     throw asStorageError(err);
   }
+  // A directory is a folder, not an object: keys under it exist, the key
+  // itself doesn't (same as a prefix on an object store).
+  if (stat.isDirectory()) {
+    throw new StorageError({ code: 'NotFound', message: `not found: ${key}` });
+  }
   const sidecar = await readSidecar(filePath);
   const base: StorageItemMeta = {
     path: key,

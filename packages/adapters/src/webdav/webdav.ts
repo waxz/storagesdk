@@ -1,9 +1,8 @@
 import { posix } from 'node:path';
-import { Readable } from 'node:stream';
-import type { ReadableStream as NodeWebReadableStream } from 'node:stream/web';
 import {
   type Adapter,
   type BodyInput,
+  bodyToBytes,
   type CreateSnapshotOptions,
   checkSignal,
   defaultDiff,
@@ -115,6 +114,16 @@ function fileToMeta(file: FileStat, key: string): StorageItemMeta {
   };
 }
 
+/** Absolute URL of a remote path, with each segment percent-encoded. */
+function resourceUrl(baseUrl: string, path: string): string {
+  const encoded = path
+    .split('/')
+    .filter((s) => s.length > 0)
+    .map(encodeURIComponent)
+    .join('/');
+  return `${baseUrl.replace(/\/+$/, '')}/${encoded}`;
+}
+
 /** Strip a trailing `/` from a remote path. Used to normalize
  *  directory paths into a single shape so the visited-set in
  *  `walkKeys` matches regardless of whether the server includes
@@ -123,9 +132,7 @@ function stripTrailingSlash(p: string): string {
   return p.length > 1 && p.endsWith('/') ? p.slice(0, -1) : p;
 }
 
-function buildClientOptions(
-  config: WebdavConfig
-): Parameters<typeof createClient>[1] {
+function resolveAuthType(config: WebdavConfig): AuthType {
   const explicit = config.authType ? AUTH_TYPE_MAP[config.authType] : undefined;
   const inferred =
     config.token !== undefined
@@ -133,7 +140,35 @@ function buildClientOptions(
       : config.username !== undefined
         ? AuthType.Password
         : AuthType.None;
-  const authType = explicit ?? inferred;
+  return explicit ?? inferred;
+}
+
+/**
+ * Headers that authenticate a request the adapter sends itself, matching
+ * what the `webdav` client would send. Undefined for digest auth, which
+ * needs the client's challenge/response round-trip.
+ */
+function directAuthHeaders(
+  config: WebdavConfig
+): Record<string, string> | undefined {
+  switch (resolveAuthType(config)) {
+    case AuthType.Password: {
+      const pair = `${config.username ?? ''}:${config.password ?? ''}`;
+      return { Authorization: `Basic ${Buffer.from(pair).toString('base64')}` };
+    }
+    case AuthType.Token:
+      return { Authorization: `Bearer ${config.token ?? ''}` };
+    case AuthType.None:
+      return {};
+    default:
+      return undefined;
+  }
+}
+
+function buildClientOptions(
+  config: WebdavConfig
+): Parameters<typeof createClient>[1] {
+  const authType = resolveAuthType(config);
   return {
     authType,
     ...(config.username !== undefined ? { username: config.username } : {}),
@@ -193,7 +228,16 @@ function createImpl(
     }
     // `stat` returns `FileStat | ResponseDataDetailed<FileStat>`; we
     // never pass `{details: true}` so it's always the bare FileStat.
-    return fileToMeta(stat as FileStat, key);
+    const file = stat as FileStat;
+    // A collection is a folder, not an object: keys under it exist, the
+    // key itself doesn't (same as a prefix on an object store).
+    if (file.type === 'directory') {
+      throw new StorageError({
+        code: 'NotFound',
+        message: `not found: ${key}`,
+      });
+    }
+    return fileToMeta(file, key);
   };
 
   /** Recursive walk under this adapter's `folderPath`, yielding
@@ -263,23 +307,44 @@ function createImpl(
     ): Promise<StorageItemMeta> {
       checkSignal(opts?.signal);
       const fullPath = resolveSafe(folderPath, key);
-      // Streams are sent as they arrive (chunked transfer encoding) rather
-      // than collected first.
-      const prepared = await prepareBody(body);
+      // Streams are sent as they arrive (chunked transfer encoding) with
+      // `fetch`, which takes a web stream on every runtime; the `webdav`
+      // client's browser build (picked by bundlers for edge runtimes)
+      // can't send streams. Digest auth needs the client, so streams fall
+      // back to being read into memory there.
+      const authHeaders = directAuthHeaders(config);
+      const prepared = await prepareBody(
+        body instanceof ReadableStream && authHeaders === undefined
+          ? await bodyToBytes(body)
+          : body
+      );
       await ensureDir(posix.dirname(fullPath), opts?.signal);
       const contentType = opts?.contentType ?? 'application/octet-stream';
       try {
-        const data =
-          prepared.data instanceof Uint8Array
-            ? Buffer.from(prepared.data)
-            : Readable.fromWeb(
-                prepared.data as NodeWebReadableStream<Uint8Array>
-              );
-        await client.putFileContents(fullPath, data, {
-          overwrite: true,
-          headers: { 'Content-Type': contentType },
-          ...(opts?.signal ? { signal: opts.signal } : {}),
-        });
+        if (prepared.data instanceof Uint8Array) {
+          await client.putFileContents(fullPath, Buffer.from(prepared.data), {
+            overwrite: true,
+            headers: { 'Content-Type': contentType },
+            ...(opts?.signal ? { signal: opts.signal } : {}),
+          });
+        } else {
+          const res = await fetch(resourceUrl(config.baseUrl, fullPath), {
+            method: 'PUT',
+            body: prepared.data,
+            duplex: 'half',
+            headers: { ...authHeaders, 'Content-Type': contentType },
+            ...(opts?.signal ? { signal: opts.signal } : {}),
+          });
+          await res.body?.cancel();
+          if (!res.ok) {
+            throw Object.assign(
+              new Error(
+                `PUT ${fullPath} failed: ${res.status} ${res.statusText}`
+              ),
+              { status: res.status }
+            );
+          }
+        }
       } catch (err) {
         throw asStorageError(err);
       }
