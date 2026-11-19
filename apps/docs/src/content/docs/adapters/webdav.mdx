@@ -50,7 +50,7 @@ webdav({
 - **Content-Type is honored** end-to-end (PUT `Content-Type` on upload, `getcontenttype` via PROPFIND on read; `download` reads it off the GET response headers to skip a separate stat).
 - **No user metadata.** WebDAV's PROPPATCH dead properties exist in the spec but server support is inconsistent (Nextcloud OK, generic Apache mod_dav unreliable). `upload({ metadata })` is silently dropped.
 - **No presigned uploads.** `uploadUrl()` throws `NotSupported`.
-- **Streamed uploads.** A `ReadableStream` body is sent as it arrives, with chunked transfer encoding, so the adapter never holds the whole file. Other body types are sent with a `Content-Length`.
+- **Streamed uploads.** A `ReadableStream` body is sent as it arrives, with chunked transfer encoding, so the adapter never holds the whole file. The adapter sends these requests with `fetch` itself, so they work on edge runtimes too. With digest auth the stream is read into memory first, since digest needs the `webdav` client. Other body types are sent with a `Content-Length`.
 - `url()` returns the plain resource URL (`getFileDownloadLink`). Caller supplies auth to fetch — it's not signed.
 - **Walks use `Depth: 1` PROPFIND.** Most production WebDAV servers (Apache mod_dav, several SaaS providers) disable `Depth: infinity` for safety. The adapter walks subdirectories one PROPFIND at a time, reusing each PROPFIND's `FileStat` so `list` doesn't need a per-item stat round-trip.
 - `storage.raw` is the underlying `WebDAVClient` — use it for PROPPATCH, LOCK, custom properties, or any DAV verb the adapter doesn't surface.
